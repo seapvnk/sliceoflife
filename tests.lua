@@ -1,0 +1,351 @@
+-- Run with:  luajit ecs_test.lua
+
+local ecs       = require "src.sliceoflife"
+local Component = ecs.Component
+local System    = ecs.System
+local Scheduler = ecs.Scheduler
+local World     = ecs.World
+local EventBus  = ecs.EventBus
+
+-- Harness
+
+local passed, failed = 0, 0
+
+local function describe(label)
+    io.write("\n  " .. label .. "\n")
+end
+
+local function it(label, fn)
+    local ok, err = pcall(fn)
+    if ok then
+        io.write(("    ✓ %s\n"):format(label))
+        passed = passed + 1
+    else
+        io.write(("    ✗ %s\n      %s\n"):format(label, tostring(err)))
+        failed = failed + 1
+    end
+end
+
+local function eq(a, b)
+    assert(a == b, ("expected %s, got %s"):format(tostring(b), tostring(a)))
+end
+
+local function near(a, b, tol)
+    tol = tol or 1e-4
+    assert(math.abs(a - b) <= tol,
+        ("expected ~%s, got %s"):format(tostring(b), tostring(a)))
+end
+
+local function is_true(v, msg)  assert(v,     msg or "expected true")  end
+local function is_false(v, msg) assert(not v, msg or "expected false") end
+
+local function errors(fn, pattern)
+    local ok, err = pcall(fn)
+    assert(not ok, "expected an error but none was raised")
+    if pattern then
+        assert(tostring(err):find(pattern),
+            ("error '%s' did not match '%s'"):format(err, pattern))
+    end
+end
+
+-- helper: find a specific entity id in a query result
+local function find(mask, id)
+    for e in World.query(mask) do
+        if e.id == id then return e end
+    end
+end
+
+-- Component declarations
+-- All components are registered once here; Registry is module-level state.
+
+Component "position" :with "float x, y;"
+Component "velocity" :with "float x, y;"
+Component "health"   :with "float value;"
+Component "lifetime" :with "float remaining;"
+Component "tag"      :with "int id;"
+
+-- ─── Tests ───────────────────────────────────────────────────────────────────
+
+describe("Registry")
+
+    it("rejects duplicate component names", function()
+        errors(function() Component "position" :with "float x, y;" end,
+               "already defined")
+    end)
+
+    it("rejects unknown component in System :needs()", function()
+        errors(function()
+            System "ghost_sys" :needs("ghost") :does(function() end)
+        end, "unknown component")
+    end)
+
+describe("World.spawn / proxy")
+
+    it("spawn returns a numeric id", function()
+        local id = World.spawn { position = { x = 1, y = 2 } }
+        is_true(type(id) == "number")
+        is_true(id >= 1)
+    end)
+
+    it("proxy reads spawned component fields", function()
+        local id = World.spawn { position = { x = 3, y = 7 } }
+        local e  = find(0xFFFFFFFF, id)
+        is_true(e ~= nil, "entity not found")
+        near(e.position.x, 3)
+        near(e.position.y, 7)
+    end)
+
+    it("proxy field writes persist", function()
+        local id = World.spawn { position = { x = 0, y = 0 } }
+        local e  = find(0xFFFFFFFF, id)
+        e.position.x = 55
+        e.position.y = 77
+        local e2 = find(0xFFFFFFFF, id)
+        near(e2.position.x, 55)
+        near(e2.position.y, 77)
+    end)
+
+    it("proxy exposes .id equal to spawn return", function()
+        local id = World.spawn { position = { x = 0, y = 0 } }
+        local e  = find(0xFFFFFFFF, id)
+        eq(e.id, id)
+    end)
+
+    it("proxy assignment at the top level raises an error", function()
+        local id = World.spawn { position = { x = 0, y = 0 } }
+        local e  = find(0xFFFFFFFF, id)
+        errors(function() e.position = {} end)
+    end)
+
+describe("World component mutation")
+
+    it("add_component attaches and is reflected by has_component", function()
+        local id = World.spawn { position = { x = 0, y = 0 } }
+        is_false(World.has_component(id, "health"))
+        World.add_component(id, "health", { value = 50 })
+        is_true(World.has_component(id, "health"))
+    end)
+
+    it("add_component value is readable via proxy", function()
+        local id = World.spawn { position = { x = 0, y = 0 } }
+        World.add_component(id, "health", { value = 75 })
+        local e = find(0xFFFFFFFF, id)
+        near(e.health.value, 75)
+    end)
+
+    it("remove_component clears has_component", function()
+        local id = World.spawn {
+            position = { x = 0, y = 0 },
+            health   = { value = 100 },
+        }
+        World.remove_component(id, "health")
+        is_false(World.has_component(id, "health"))
+    end)
+
+    it("add_component with unknown name raises", function()
+        local id = World.spawn { position = { x = 0, y = 0 } }
+        errors(function() World.add_component(id, "ghost", {}) end,
+               "unknown component")
+    end)
+
+describe("World.query archetype filtering")
+
+    it("query with full mask returns only matching entities", function()
+        local full     = World.spawn { position = { x = 1, y = 1 },
+                                       velocity = { x = 1, y = 0 } }
+        local pos_only = World.spawn { position = { x = 5, y = 5 } }
+
+        local sys = System "filter_test"
+            :needs("position", "velocity")
+            :does(function() end)
+
+        is_true (find(sys.mask, full)     ~= nil, "full entity should match")
+        is_false(find(sys.mask, pos_only) ~= nil, "pos-only should not match")
+    end)
+
+    it("query with mask 0xFFFFFFFF still skips destroyed slots", function()
+        local id = World.spawn { position = { x = 99, y = 99 } }
+        World.destroy(id)
+        is_false(find(0xFFFFFFFF, id) ~= nil, "destroyed entity must not appear")
+    end)
+
+describe("World.destroy")
+
+    it("destroyed entity is excluded from query", function()
+        local id = World.spawn { position = { x = 10, y = 10 } }
+        World.destroy(id)
+        is_false(find(0xFFFFFFFF, id) ~= nil)
+    end)
+
+    it("slot can be reused after destroy", function()
+        local id1 = World.spawn { position = { x = 0, y = 0 } }
+        World.destroy(id1)
+        local id2 = World.spawn { position = { x = 1, y = 1 } }
+        -- id2 may or may not equal id1 depending on free-list; just verify it is alive
+        is_true(find(0xFFFFFFFF, id2) ~= nil)
+    end)
+
+describe("System DSL")
+
+    it(":needs :does produces a descriptor with mask and _fn", function()
+        local sys = System "dsl_test"
+            :needs("position")
+            :does(function() end)
+        is_true(sys.mask ~= nil)
+        is_true(sys.mask > 0)
+        is_true(type(sys._fn) == "function")
+        eq(sys.name, "dsl_test")
+    end)
+
+    it("registering a system without :does() raises", function()
+        local sys = System "no_does" :needs("position")
+        errors(function() Scheduler.new():register(sys) end)
+    end)
+
+describe("Scheduler")
+
+    it(":register returns self for chaining", function()
+        local sched = Scheduler.new()
+        local sys   = System "chain" :needs("position") :does(function() end)
+        eq(sched:register(sys), sched)
+    end)
+
+    it(":count reflects registered systems", function()
+        local sched = Scheduler.new()
+        eq(sched:count(), 0)
+        sched:register(System "c1" :needs("position") :does(function() end))
+        eq(sched:count(), 1)
+        sched:register(System "c2" :needs("health")   :does(function() end))
+        eq(sched:count(), 2)
+    end)
+
+describe("Scheduler:tick — integration")
+
+    it("physics moves entity over one tick", function()
+        local id = World.spawn {
+            position = { x = 0,   y = 0   },
+            velocity = { x = 120, y = 60  },
+        }
+        local sys = System "phys"
+            :needs("position", "velocity")
+            :does(function(e, ctx)
+                e.position.x = e.position.x + e.velocity.x * ctx.dt
+                e.position.y = e.position.y + e.velocity.y * ctx.dt
+            end)
+        Scheduler.new():register(sys):tick(1/60)
+        local e = find(sys.mask, id)
+        near(e.position.x, 120/60, 1e-3)
+        near(e.position.y, 60/60,  1e-3)
+    end)
+
+    it("system fn is called once per matching entity per tick", function()
+        local hits = 0
+        local ids = {
+            World.spawn { health = { value = 10 } },
+            World.spawn { health = { value = 10 } },
+            World.spawn { health = { value = 10 } },
+        }
+        local sys = System "hit_counter"
+            :needs("health")
+            :does(function(e, ctx)
+                for _, id in ipairs(ids) do
+                    if e.id == id then hits = hits + 1 end
+                end
+            end)
+        Scheduler.new():register(sys):tick(1/60)
+        eq(hits, 3)
+    end)
+
+    it("ctx.frame increments each tick", function()
+        local last_frame
+        World.spawn { position = { x = 0, y = 0 } }
+        local sys = System "frame_check"
+            :needs("position")
+            :does(function(e, ctx) last_frame = ctx.frame end)
+        local sched = Scheduler.new():register(sys)
+        sched:tick(1/60)
+        sched:tick(1/60)
+        sched:tick(1/60)
+        eq(last_frame, 3)
+    end)
+
+    it("ctx.dt carries the value passed to tick", function()
+        local seen
+        World.spawn { position = { x = 0, y = 0 } }
+        local sys = System "dt_check"
+            :needs("position")
+            :does(function(e, ctx) seen = ctx.dt end)
+        Scheduler.new():register(sys):tick(0.12345)
+        near(seen, 0.12345)
+    end)
+
+    it("two systems on the same entity see each other's writes", function()
+        local id = World.spawn {
+            position = { x = 0,   y = 0   },
+            velocity = { x = 60,  y = 0   },
+            health   = { value = 100       },
+        }
+        local move = System "two_move"
+            :needs("position", "velocity")
+            :does(function(e, ctx)
+                e.position.x = e.position.x + e.velocity.x * ctx.dt
+            end)
+        local decay = System "two_decay"
+            :needs("health")
+            :does(function(e, ctx)
+                e.health.value = e.health.value - 20 * ctx.dt
+            end)
+        Scheduler.new():register(move):register(decay):tick(1.0)
+        local e = find(0xFFFFFFFF, id)
+        near(e.position.x, 60,  0.01)
+        near(e.health.value, 80, 0.01)
+    end)
+
+describe("EventBus")
+
+    it("subscriber receives published data", function()
+        local got
+        EventBus.subscribe("ev_a", function(d) got = d.v end)
+        EventBus.publish("ev_a", { v = 42 })
+        eq(got, 42)
+        EventBus.unsubscribe_all("ev_a")
+    end)
+
+    it("multiple subscribers each fire", function()
+        local log = {}
+        EventBus.subscribe("ev_b", function(d) log[#log+1] = "x:" .. d.n end)
+        EventBus.subscribe("ev_b", function(d) log[#log+1] = "y:" .. d.n end)
+        EventBus.publish("ev_b", { n = 7 })
+        eq(#log, 2)
+        eq(log[1], "x:7")
+        eq(log[2], "y:7")
+        EventBus.unsubscribe_all("ev_b")
+    end)
+
+    it("publish with no subscribers is a no-op", function()
+        EventBus.publish("ev_nobody", { x = 1 })  -- must not error
+    end)
+
+    it("system publishes via ctx.bus during tick", function()
+        local fired = false
+        EventBus.subscribe("died", function(d)
+            if d.id then fired = true end
+        end)
+        local id = World.spawn { health = { value = 1 } }
+        local sys = System "killer"
+            :needs("health")
+            :does(function(e, ctx)
+                e.health.value = e.health.value - 10
+                if e.health.value <= 0 then
+                    ctx.bus.publish("died", { id = e.id })
+                end
+            end)
+        Scheduler.new():register(sys):tick(1/60)
+        is_true(fired, "entity_died event not fired")
+        EventBus.unsubscribe_all("died")
+    end)
+
+-- Results
+
+io.write(("\n  %d passed  %d failed\n\n"):format(passed, failed))
+if failed > 0 then os.exit(1) end
