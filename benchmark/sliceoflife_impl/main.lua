@@ -1,4 +1,4 @@
-local ecs = require "sliceoflife"
+local ecs = require "../src/sliceoflife"
 local Component, System, Scheduler, World = ecs.Component, ecs.System, ecs.Scheduler, ecs.World
 
 Component "position" :with "float x, y;"
