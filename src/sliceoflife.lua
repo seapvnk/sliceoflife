@@ -41,6 +41,7 @@ local Registry = (function()
         define = define,
         mask   = mask,
         array  = function(name) return _arrays[name] end,
+        arrays = _arrays,
         known  = function(name) return _masks[name] ~= nil end,
     }
 end)()
@@ -53,12 +54,15 @@ local World = (function()
     local _top   = 0   -- highest slot ever used
     local _free  = {}
 
+    local _arrays = Registry.arrays
+
     -- Proxy: e.position → live FFI pointer; e.id → slot number
     local Proxy = {}
     Proxy.__index = function(t, k)
-        if k == "id" then return rawget(t, "_id") end
-        local arr = Registry.array(k)
-        return arr and arr[rawget(t, "_id")] or nil
+        local i = t._state[1]
+        if k == "id" then return i end
+        local arr = _arrays[k]
+        return arr and arr[i] or nil
     end
     Proxy.__newindex = function()
         error("write into component fields directly: e.position.x = v")
@@ -107,22 +111,28 @@ local World = (function()
 
     -- Iterator over live entities whose archetype includes required_mask.
     -- Destroyed slots have mask == 0 and are always skipped.
+    local function query_next(state, _)
+        local req = state.mask
+        local i = state[1]
+        repeat
+            i = i + 1
+            if i > _top then return nil end
+            local em = _arch[i].mask
+            if em ~= 0 and bit.band(em, req) == req then
+                state[1] = i
+                return state.proxy
+            end
+        until false
+    end
+
     local function query(required_mask)
         required_mask = required_mask or 0
         if required_mask == 0xFFFFFFFF or required_mask == -1 then
             required_mask = 0
         end
-        local i = 0
-        return function()
-            repeat
-                i = i + 1
-                if i > _top then return nil end
-                local em = _arch[i].mask
-                if em ~= 0 and bit.band(em, required_mask) == required_mask then
-                    return setmetatable({ _id = i }, Proxy)
-                end
-            until false
-        end
+        local state = { 0, mask = required_mask }
+        state.proxy = setmetatable({ _state = state }, Proxy)
+        return query_next, state, nil
     end
 
     return {
@@ -132,6 +142,9 @@ local World = (function()
         remove_component = remove_component,
         has_component    = has_component,
         query            = query,
+        query_next       = query_next,
+        arch             = _arch,
+        top              = function() return _top end,
     }
 end)()
 
@@ -171,7 +184,7 @@ end
 --       :does(function(e, ctx) ... end)
 
 local function System(name)
-    local desc = { name = name, _needs = {}, _fn = nil, mask = nil, co = nil }
+    local desc = { name = name, _needs = {}, _fn = nil, mask = nil, ctx = nil }
 
     function desc:needs(...)
         self._needs = { ... }
@@ -188,7 +201,7 @@ local function System(name)
 end
 
 -- Scheduler
--- Wraps each system fn in a coroutine. Chainable :register().
+-- Chainable :register().
 
 local Scheduler = {}
 Scheduler.__index = Scheduler
@@ -201,36 +214,38 @@ function Scheduler:register(sys)
     assert(sys._fn and sys.mask,
         "system '" .. sys.name .. "' must call :needs() and :does() before registering")
 
-    local fn, mask = sys._fn, sys.mask
-
-    sys.co = coroutine.create(function()
-        local ctx = { dt = 0, frame = 0, world = World, bus = EventBus }
-        while true do
-            ctx.dt    = coroutine.yield()
-            ctx.frame = ctx.frame + 1
-            for e in World.query(mask) do fn(e, ctx) end
-        end
-    end)
-
-    local ok, err = coroutine.resume(sys.co)
-    assert(ok, "system '" .. sys.name .. "' failed to boot: " .. tostring(err))
-
+    sys.ctx = { dt = 0, frame = 0, world = World, bus = EventBus }
+    local _, state = World.query(sys.mask)
+    sys.state = state
+    
     table.insert(self._systems, sys)
     return self
 end
 
 function Scheduler:tick(dt)
+    local band = bit.band
+    local arch = World.arch
     for _, sys in ipairs(self._systems) do
-        local ok, err = coroutine.resume(sys.co, dt)
-        if not ok then
-            io.stderr:write(("[ECS] '%s' crashed: %s\n"):format(sys.name, err))
+        local ctx = sys.ctx
+        ctx.dt = dt
+        ctx.frame = ctx.frame + 1
+        local fn = sys._fn
+        local req = sys.mask
+        local state = sys.state
+        local proxy = state.proxy
+        local top = World.top()
+
+        for i = 1, top do
+            local em = arch[i].mask
+            if em ~= 0 and band(em, req) == req then
+                state[1] = i
+                fn(proxy, ctx)
+            end
         end
     end
 end
 
 function Scheduler:count() return #self._systems end
-
--- Public API
 
 return {
     Component = Component,

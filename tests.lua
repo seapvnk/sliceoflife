@@ -1,4 +1,4 @@
--- Run with:  luajit ecs_test.lua
+-- Run with:  luajit tests.lua
 
 local ecs       = require "src.sliceoflife"
 local Component = ecs.Component

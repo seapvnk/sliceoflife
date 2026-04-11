@@ -44,4 +44,4 @@ local function run_benchmark(name, iters)
     print(string.format("Total Iterations: %d", iters))
 end
 
-run_benchmark("Concord", 5000)
+run_benchmark("Concord", 10000)
