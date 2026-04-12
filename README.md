@@ -1,4 +1,4 @@
-# ecs.lua
+# sliceoflife
 
 Declarative ECS for LuaJIT. Components live in FFI C arrays. Systems run as coroutines ticked by a scheduler.
 
@@ -95,12 +95,47 @@ Dispatch is synchronous — subscribers fire immediately inside `publish`.
 
 ---
 
+## Save / Load
+
+```lua
+World.save("world.bin")   -- snapshot every live entity to a binary file
+World.load("world.bin")   -- wipe current state and restore from file
+```
+
+`save` writes every entity whose archetype mask is non-zero — i.e. every entity that has not been destroyed. `load` wipes all current entities first, then restores the snapshot exactly as it was saved. Entity slot ids are preserved, so any id you cached in Lua remains valid after loading.
+
+**Schema validation.** Before restoring any data, `load` checks that the component names and struct sizes in the file match the current Registry exactly. If you rename a component or change its fields between saves, `load` raises a descriptive error instead of silently corrupting data.
+
+**Typical pattern:**
+
+```lua
+-- startup
+Component "position" :with "float x, y;"
+Component "health"   :with "float value;"
+
+if file_exists("save.bin") then
+    World.load("save.bin")   -- must come before any World.spawn
+else
+    World.spawn { position = { x = 0, y = 0 }, health = { value = 100 } }
+end
+
+-- on quit / checkpoint
+World.save("save.bin")
+```
+
+**Constraints specific to save/load:**
+- `load` must be called before any `World.spawn` — it restores slots by id directly and will collide with freshly allocated ones.
+- Save files are not portable across platforms with different endianness or struct padding. Same OS / same compiler is always safe.
+- The file format is a flat binary, not human-readable. Don't edit it by hand.
+
+---
+
 ## Constraints
 
 - LuaJIT only (`ffi`, `bit` required).
 - Max **65 536** entities, max **32** component types.
 - Components must be declared **before** any `World.spawn` or `System :needs` that references them.
-- Component names must be unique across the lifetime of the process (no re-definition).
-- `e.someComponent = value` raises — you must write into fields: `e.position.x = v`.
+- Component names must be unique for the lifetime of the process (no re-definition).
+- `e.someComponent = value` raises — write into fields: `e.position.x = v`.
 - `World` and `EventBus` are module-level singletons; there is no multi-world support.
-- Event dispatch is synchronous and not deferred — publishing inside a system affects the current tick immediately.
+- Event dispatch is synchronous — publishing inside a system affects the current tick immediately.

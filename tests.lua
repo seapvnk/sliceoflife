@@ -148,6 +148,23 @@ describe("World component mutation")
                "unknown component")
     end)
 
+describe("World.save / World.load")
+
+    it("save and load preserve entity data", function()
+        local id = World.spawn { position = { x = 1, y = 2 }, health = { value = 100 } }
+        local test_filename = "test_save_0000.bin"
+        World.save(test_filename)
+        World.destroy(id)
+        World.load(test_filename)
+        local e = find(0xFFFFFFFF, id)
+        is_true(e ~= nil, "entity should exist after load")
+        near(e.position.x, 1)
+        near(e.position.y, 2)
+        near(e.health.value, 100)
+
+        os.remove(test_filename)
+    end)
+
 describe("World.query archetype filtering")
 
     it("query with full mask returns only matching entities", function()

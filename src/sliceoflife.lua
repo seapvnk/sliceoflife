@@ -8,7 +8,7 @@ local MAX_ENTITIES   = 65536
 local MAX_COMPONENTS = 32
 
 -- Registry
--- Private. Tracks component name → bitmask + FFI array.
+-- Private. Tracks component name -> bitmask + FFI array.
 -- Grows dynamically as Component() calls arrive.
 
 ffi.cdef [[ typedef struct { uint32_t mask; } ECS_Archetype; ]]
@@ -37,9 +37,23 @@ local Registry = (function()
         return m
     end
 
+    local function names()
+        local names = {}
+        for name, _ in pairs(_arrays) do
+            table.insert(names, name)
+        end
+        return names
+    end
+
+    local function sizeof(name)
+        return ffi.sizeof("ECS_" .. name)
+    end
+
     return {
         define = define,
         mask   = mask,
+        names  = names,
+        sizeof = sizeof,
         array  = function(name) return _arrays[name] end,
         arrays = _arrays,
         known  = function(name) return _masks[name] ~= nil end,
@@ -56,7 +70,7 @@ local World = (function()
 
     local _arrays = Registry.arrays
 
-    -- Proxy: e.position → live FFI pointer; e.id → slot number
+    -- Proxy: e.position -> live FFI pointer; e.id -> slot number
     local Proxy = {}
     Proxy.__index = function(t, k)
         local i = t._state[1]
@@ -135,6 +149,114 @@ local World = (function()
         return query_next, state, nil
     end
 
+    -- Binary format
+    -- Header:
+    --   [4b] magic "SOL\1"
+    --   [4b] component count N
+    --   per component: [1b] name length, [Nb] name, [4b] sizeof(struct)
+    -- Records (every live slot, mask ~= 0):
+    --   [4b] slot id, [4b] archetype mask
+    --   per set component: [sizeof] raw struct bytes
+ 
+    local MAGIC = "SOL\1"
+ 
+    local function u32le(n)
+        return string.char(
+            bit.band(n,            0xFF),
+            bit.band(bit.rshift(n,  8), 0xFF),
+            bit.band(bit.rshift(n, 16), 0xFF),
+            bit.band(bit.rshift(n, 24), 0xFF))
+    end
+ 
+    local function save(path)
+        local f     = assert(io.open(path, "wb"), "cannot open for write: " .. path)
+        local names = Registry.names()
+        local buf   = ffi.new("uint8_t[65536]")
+ 
+        f:write(MAGIC)
+        f:write(u32le(#names))
+        for _, name in ipairs(names) do
+            f:write(string.char(#name))
+            f:write(name)
+            f:write(u32le(Registry.sizeof(name)))
+        end
+ 
+        for id = 1, _top do
+            local m = _arch[id].mask
+            if m ~= 0 then
+                f:write(u32le(id))
+                f:write(u32le(m))
+                for _, name in ipairs(names) do
+                    local cm = Registry.mask({ name })
+                    if bit.band(m, cm) == cm then
+                        local sz = Registry.sizeof(name)
+                        ffi.copy(buf, Registry.array(name)[id], sz)
+                        f:write(ffi.string(buf, sz))
+                    end
+                end
+            end
+        end
+ 
+        f:close()
+    end
+ 
+    local function read_u32(f)
+        local b = assert(f:read(4), "unexpected EOF")
+        local a, b2, c, d = b:byte(1, 4)
+        return bit.bor(a, bit.lshift(b2, 8), bit.lshift(c, 16), bit.lshift(d, 24))
+    end
+ 
+    local function load(path)
+        local f = assert(io.open(path, "rb"), "cannot open for read: " .. path)
+ 
+        assert(f:read(4) == MAGIC, "not a valid ECS save file")
+
+        local names = Registry.names()
+ 
+        local n = read_u32(f)
+        assert(n == #names,
+            ("save has %d component types, registry has %d"):format(n, #names))
+        for i = 1, n do
+            local name = f:read(f:read(1):byte())
+            local sz   = read_u32(f)
+            assert(name == names[i],
+                ("component mismatch at slot %d: file='%s' registry='%s'")
+                :format(i, name, names[i]))
+            assert(sz == Registry.sizeof(name),
+                ("size mismatch for '%s': file=%d registry=%d")
+                :format(name, sz, Registry.sizeof(name)))
+        end
+ 
+        -- wipe current state before restoring
+        for id = 1, _top do _arch[id].mask = 0 end
+        _top  = 0
+        _free = {}
+ 
+        local buf = ffi.new("uint8_t[65536]")
+        while true do
+            local hdr = f:read(4)
+            if not hdr or #hdr < 4 then break end
+            local a, b2, c, d = hdr:byte(1, 4)
+            local id = bit.bor(a, bit.lshift(b2, 8), bit.lshift(c, 16), bit.lshift(d, 24))
+            local m  = read_u32(f)
+ 
+            _arch[id].mask = m
+            if id > _top then _top = id end
+ 
+            for _, name in ipairs(names) do
+                local cm = Registry.mask({ name })
+                if bit.band(m, cm) == cm then
+                    local sz  = Registry.sizeof(name)
+                    local raw = assert(f:read(sz), "truncated data for: " .. name)
+                    ffi.copy(buf, raw, sz)
+                    ffi.copy(Registry.array(name)[id], buf, sz)
+                end
+            end
+        end
+ 
+        f:close()
+    end
+
     return {
         spawn            = spawn,
         destroy          = destroy,
@@ -143,6 +265,8 @@ local World = (function()
         has_component    = has_component,
         query            = query,
         query_next       = query_next,
+        save             = save,
+        load             = load,
         arch             = _arch,
         top              = function() return _top end,
     }
