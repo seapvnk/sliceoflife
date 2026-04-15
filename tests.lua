@@ -1,6 +1,7 @@
 -- Run with:  luajit tests.lua
 
 local ecs       = require "src.sliceoflife"
+local T         = ecs.Type
 local Component = ecs.Component
 local System    = ecs.System
 local Scheduler = ecs.Scheduler
@@ -58,18 +59,18 @@ end
 -- Component declarations
 -- All components are registered once here; Registry is module-level state.
 
-Component "position" :with "float x, y;"
-Component "velocity" :with "float x, y;"
-Component "health"   :with "float value;"
-Component "lifetime" :with "float remaining;"
-Component "tag"      :with "int id;"
+Component "position" :with (T.Float("x", "y"))
+Component "velocity" :with (T.Float("x", "y"))
+Component "health"   :with (T.Float "value")
+Component "lifetime" :with (T.Float "remaining")
+Component "tag"      :with (T.Int "id")
 
 -- ─── Tests ───────────────────────────────────────────────────────────────────
 
 describe("Registry")
 
     it("rejects duplicate component names", function()
-        errors(function() Component "position" :with "float x, y;" end,
+        errors(function() Component "position" :with (T.Float("x", "y")) end,
                "already defined")
     end)
 
@@ -77,6 +78,29 @@ describe("Registry")
         errors(function()
             System "ghost_sys" :needs("ghost") :does(function() end)
         end, "unknown component")
+    end)
+
+describe("Type")
+
+    it("pack and unpack almost preserving values", function()
+        local t = { x = 32200.11, y = 44.56 }
+        local encoded = T.pack(t)
+        local decoded = T.unpack(encoded, { "x", "y" })
+        near(decoded.x, 32200.11, 1e-1)
+        near(decoded.y, 44.56, 1e-1)
+    end)
+
+    it("pack and unpack on integers", function()
+        local attr = { str = 10, int = 10, chr = 10, dex = 10, con = 10, wis = 10, cha = 10}
+        local encoded = T.ipack(attr)
+        local decoded = T.iunpack(encoded, { "str", "int", "chr", "dex", "con", "wis", "cha"})
+        eq(decoded.str, 10)
+        eq(decoded.int, 10)
+        eq(decoded.chr, 10)
+        eq(decoded.dex, 10)
+        eq(decoded.con, 10)
+        eq(decoded.wis, 10)
+        eq(decoded.cha, 10)
     end)
 
 describe("World.spawn / proxy")

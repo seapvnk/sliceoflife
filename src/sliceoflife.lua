@@ -292,8 +292,185 @@ local EventBus = (function()
     }
 end)()
 
+-- Type
+-- DSL: 
+--     Type.Float "x", Type.Float "y"
+--     Type.Int "id"
+local Type = {}
+
+local function _type(typ, ...)
+    local args = { ... }
+    local str = ""
+    for _, arg in ipairs(args) do
+        str = str .. typ .. " " .. arg .. ";"
+    end
+    return str
+end
+
+local _basic_types = { Float = "float", Int = "int", Word = "uint64_t" }
+for k, v in pairs(_basic_types) do Type[k] = function(...) return _type(v, ...) end end
+
+local MIN_BOUND = -1e6
+local MAX_BOUND =  1e6
+ 
+local u64  = ffi.new("uint64_t", 0)
+local POW2 = ffi.new("uint64_t[64]")
+POW2[0] = 1
+for i = 1, 63 do POW2[i] = POW2[i - 1] * 2ULL end
+local ZERO = ffi.new("uint64_t", 0)
+ 
+local function U(n) return ffi.cast("uint64_t", n) end
+ 
+-- encode a float in [MIN_BOUND, MAX_BOUND] into b bits
+local function qencode(v, b)
+    local levels = 2^b - 1
+    local t = (v - MIN_BOUND) / (MAX_BOUND - MIN_BOUND)
+    t = math.max(0, math.min(1, t))
+    return math.floor(t * levels + 0.5)
+end
+ 
+local function qdecode(q, b)
+    local levels = 2^b - 1
+    return MIN_BOUND + (q / levels) * (MAX_BOUND - MIN_BOUND)
+end
+ 
+function Type.pack(t)
+    -- collect keys in sorted order for determinism
+    local keys = {}
+    for k in pairs(t) do keys[#keys+1] = k end
+    table.sort(keys)
+    local n = #keys
+    assert(n >= 1 and n <= 15, "pack supports 1–15 fields")
+ 
+    local values = {}
+    for i, k in ipairs(keys) do values[i] = t[k] end
+ 
+    local min, max = values[1], values[1]
+    for i = 2, n do
+        if values[i] < min then min = values[i] end
+        if values[i] > max then max = values[i] end
+    end
+    if min == max then max = min + 1 end
+ 
+    local bits_per = math.floor(40 / n)
+    local levels   = 2^bits_per - 1
+ 
+    local qmin_enc = qencode(min, 10)
+    local qmax_enc = qencode(max, 10)
+    
+    local qmin_dec = qdecode(qmin_enc, 10)
+    local qmax_dec = qdecode(qmax_enc, 10)
+ 
+    if qmin_dec > min then
+        qmin_enc = math.max(0, qmin_enc - 1)
+        qmin_dec = qdecode(qmin_enc, 10)
+    end
+    if qmax_dec < max then
+        qmax_enc = math.min(1023, qmax_enc + 1)
+        qmax_dec = qdecode(qmax_enc, 10)
+    end
+    if qmax_dec == qmin_dec then
+        qmax_enc = math.min(1023, qmax_enc + 1)
+        qmax_dec = qdecode(qmax_enc, 10)
+        if qmax_dec == qmin_dec then
+            qmin_enc = math.max(0, qmin_enc - 1)
+            qmin_dec = qdecode(qmin_enc, 10)
+        end
+    end
+ 
+    -- quantize payload
+    local word = ZERO
+    for i, v in ipairs(values) do
+        local norm = (v - qmin_dec) / (qmax_dec - qmin_dec)
+        local q    = math.floor(math.max(0, math.min(1, norm)) * levels + 0.5)
+        word = word + U(q) * POW2[(i - 1) * bits_per]
+    end
+ 
+    -- pack min, max, n into top 24 bits
+    word = word
+         + U(n)               * POW2[40]
+         + U(qmax_enc)        * POW2[44]
+         + U(qmin_enc)        * POW2[54]
+ 
+    return word
+end
+ 
+function Type.unpack(encoded, keys)
+    table.sort(keys)
+    local n = #keys
+ 
+    local mask4  = U(0xF)
+    local mask10 = U(0x3FF)
+ 
+    local n_dec      = tonumber((encoded / POW2[40]) % (mask4  + U(1)))
+    local qmax       = tonumber((encoded / POW2[44]) % (mask10 + U(1)))
+    local qmin_enc   = tonumber((encoded / POW2[54]) % (mask10 + U(1)))
+ 
+    assert(n_dec == n,
+        ("unpack: encoded has %d fields, keys list has %d"):format(n_dec, n))
+ 
+    local min      = qdecode(qmin_enc, 10)
+    local max      = qdecode(qmax,     10)
+    local bits_per = math.floor(40 / n)
+    local levels   = 2^bits_per - 1
+    local mask_p   = U(levels)
+ 
+    local out = {}
+    for i, k in ipairs(keys) do
+        local shifted = encoded / POW2[(i - 1) * bits_per]
+        local q       = tonumber(shifted % (mask_p + U(1)))
+        out[k]        = min + (q / levels) * (max - min)
+    end
+    return out
+end
+ 
+function Type.ipack(t)
+    local keys = {}
+    for k in pairs(t) do keys[#keys+1] = k end
+    table.sort(keys)
+    local n = #keys
+    assert(n >= 1 and n <= 15, "ipack supports 1–15 fields")
+ 
+    local bits_per = math.floor(60 / n)
+    local levels   = U(2^bits_per - 1)
+ 
+    local word = U(n) * POW2[60]
+    for i, k in ipairs(keys) do
+        local v = t[k]
+        assert(v >= 0 and v == math.floor(v),
+            "ipack: all values must be non-negative integers")
+        local q = U(v)
+        assert(q <= levels,
+            ("ipack: value %d exceeds %d-bit capacity"):format(v, bits_per))
+        word = word + q * POW2[(i - 1) * bits_per]
+    end
+    return word
+end
+ 
+function Type.iunpack(encoded, keys)
+    table.sort(keys)
+    local n = #keys
+ 
+    local mask4 = U(0xF)
+    local n_dec = tonumber((encoded / POW2[60]) % (mask4 + U(1)))
+    assert(n_dec == n,
+        ("iunpack: encoded has %d fields, keys list has %d"):format(n_dec, n))
+ 
+    local bits_per = math.floor(60 / n)
+    local mask_p   = U(2^bits_per - 1)
+ 
+    local out = {}
+    for i, k in ipairs(keys) do
+        local shifted = encoded / POW2[(i - 1) * bits_per]
+        out[k] = tonumber(shifted % (mask_p + U(1)))
+    end
+    return out
+end
+
 -- Component
--- DSL: Component "position" :with "float x, y;"
+-- DSL:
+--      Component "position" :with "float x, y;"
+--      Component "position" :with Type.Float("x", "y")
 
 local function Component(name)
     return setmetatable({}, {
@@ -372,6 +549,7 @@ end
 function Scheduler:count() return #self._systems end
 
 return {
+    Type      = Type,
     Component = Component,
     System    = System,
     Scheduler = Scheduler,

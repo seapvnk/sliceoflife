@@ -13,6 +13,7 @@ local System    = ecs.System
 local Scheduler = ecs.Scheduler
 local World     = ecs.World
 local EventBus  = ecs.EventBus
+local T         = ecs.Type
 ```
 
 ---
@@ -22,8 +23,8 @@ local EventBus  = ecs.EventBus
 Declare once at startup. Body is a raw C struct body.
 
 ```lua
-Component "position" :with "float x, y;"
-Component "health"   :with "float value;"
+Component "position" :with (T.Float("x", "y"))
+Component "health"   :with (T.Float("value"))
 ```
 
 ---
@@ -110,8 +111,8 @@ World.load("world.bin")   -- wipe current state and restore from file
 
 ```lua
 -- startup
-Component "position" :with "float x, y;"
-Component "health"   :with "float value;"
+Component "position" :with (T.Float("x", "y"))
+Component "health"   :with (T.Float("value"))
 
 if file_exists("save.bin") then
     World.load("save.bin")   -- must come before any World.spawn

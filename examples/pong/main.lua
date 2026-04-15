@@ -1,10 +1,10 @@
 local ecs = require "../src/sliceoflife"
-local Component, System, Scheduler, World = ecs.Component, ecs.System, ecs.Scheduler, ecs.World
+local Component, System, Scheduler, World, T = ecs.Component, ecs.System, ecs.Scheduler, ecs.World, ecs.Type
 
-Component "position" :with "float x, y;"
-Component "size"     :with "float w, h;"
-Component "physics"  :with "int exists;"
-Component "paddle"   :with "int id;"
+Component "position" :with (T.Float("x", "y"))
+Component "size"     :with (T.Float("w", "h"))
+Component "physics"  :with (T.Int("exists"))
+Component "paddle"   :with (T.Int("id"))
 
 local lp = love.physics
 local world_box2d = lp.newWorld(0, 0, true)
