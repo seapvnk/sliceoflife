@@ -53,7 +53,7 @@ local Physics = System "physics"
 
 `ctx` fields: `dt`, `frame`, `world`, `bus`.
 
-Entity fields (`e.position`, `e.health`, …) are live FFI pointers — write directly into their fields.
+Entity fields (`e.position`, `e.health`, …) are live FFI pointers , write directly into their fields.
 
 ## Scheduler
 
@@ -82,7 +82,7 @@ ctx.bus.publish("entity_died", { id = e.id })
 EventBus.unsubscribe_all("entity_died")
 ```
 
-Dispatch is synchronous — subscribers fire immediately inside `publish`.
+Dispatch is synchronous , subscribers fire immediately inside `publish`.
 
 
 ## Save / Load
@@ -92,7 +92,7 @@ World.save("world.bin")   -- snapshot every live entity to a binary file
 World.load("world.bin")   -- wipe current state and restore from file
 ```
 
-`save` writes every entity whose archetype mask is non-zero — i.e. every entity that has not been destroyed. `load` wipes all current entities first, then restores the snapshot exactly as it was saved. Entity slot ids are preserved, so any id you cached in Lua remains valid after loading.
+`save` writes every entity whose archetype mask is non-zero , i.e. every entity that has not been destroyed. `load` wipes all current entities first, then restores the snapshot exactly as it was saved. Entity slot ids are preserved, so any id you cached in Lua remains valid after loading.
 
 **Schema validation.** Before restoring any data, `load` checks that the component names and struct sizes in the file match the current Registry exactly. If you rename a component or change its fields between saves, `load` raises a descriptive error instead of silently corrupting data.
 
@@ -114,7 +114,7 @@ World.save("save.bin")
 ```
 
 **Constraints specific to save/load:**
-- `load` must be called before any `World.spawn` — it restores slots by id directly and will collide with freshly allocated ones.
+- `load` must be called before any `World.spawn` , it restores slots by id directly and will collide with freshly allocated ones.
 - Save files are not portable across platforms with different endianness or struct padding. Same OS / same compiler is always safe.
 - The file format is a flat binary, not human-readable. Don't edit it by hand.
 
@@ -124,6 +124,10 @@ World.save("save.bin")
 - Max **65 536** entities, max **32** component types.
 - Components must be declared **before** any `World.spawn` or `System :needs` that references them.
 - Component names must be unique for the lifetime of the process (no re-definition).
-- `e.someComponent = value` raises — write into fields: `e.position.x = v`.
+- `e.someComponent = value` raises , write into fields: `e.position.x = v`.
 - `World` and `EventBus` are module-level singletons; there is no multi-world support.
-- Event dispatch is synchronous — publishing inside a system affects the current tick immediately.
+- Event dispatch is synchronous , publishing inside a system affects the current tick immediately.
+
+## Roadmap
+ - [ ] Add wipe state.
+ - [ ] Add job system.
