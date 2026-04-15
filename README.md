@@ -1,8 +1,7 @@
 # sliceoflife
 
-Declarative ECS for LuaJIT. Components live in FFI C arrays. Systems run as coroutines ticked by a scheduler.
+Declarative ECS for LuaJIT.
 
----
 
 ## Setup
 
@@ -16,8 +15,6 @@ local EventBus  = ecs.EventBus
 local T         = ecs.Type
 ```
 
----
-
 ## Components
 
 Declare once at startup. Body is a raw C struct body.
@@ -26,8 +23,6 @@ Declare once at startup. Body is a raw C struct body.
 Component "position" :with (T.Float("x", "y"))
 Component "health"   :with (T.Float("value"))
 ```
-
----
 
 ## Entities
 
@@ -42,8 +37,6 @@ World.remove_component(id, "velocity")
 World.has_component(id, "health")   -- true / false
 World.destroy(id)
 ```
-
----
 
 ## Systems
 
@@ -62,8 +55,6 @@ local Physics = System "physics"
 
 Entity fields (`e.position`, `e.health`, …) are live FFI pointers — write directly into their fields.
 
----
-
 ## Scheduler
 
 ```lua
@@ -77,7 +68,6 @@ sched:tick(dt)
 
 `:register` is chainable. Each system runs once per matching entity per `tick`.
 
----
 
 ## EventBus
 
@@ -94,7 +84,6 @@ EventBus.unsubscribe_all("entity_died")
 
 Dispatch is synchronous — subscribers fire immediately inside `publish`.
 
----
 
 ## Save / Load
 
@@ -128,8 +117,6 @@ World.save("save.bin")
 - `load` must be called before any `World.spawn` — it restores slots by id directly and will collide with freshly allocated ones.
 - Save files are not portable across platforms with different endianness or struct padding. Same OS / same compiler is always safe.
 - The file format is a flat binary, not human-readable. Don't edit it by hand.
-
----
 
 ## Constraints
 

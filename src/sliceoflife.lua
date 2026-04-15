@@ -1,6 +1,3 @@
--- Declarative ECS for LuaJIT with FFI component storage and coroutine scheduling.
--- Authoring surface: Component, System, World, Scheduler, EventBus
-
 local ffi = require "ffi"
 local bit = require "bit"
 
