@@ -202,6 +202,13 @@ local World = (function()
         local a, b2, c, d = b:byte(1, 4)
         return bit.bor(a, bit.lshift(b2, 8), bit.lshift(c, 16), bit.lshift(d, 24))
     end
+
+    local function reset()
+        -- wipe current state before restoring
+        for id = 1, _top do _arch[id].mask = 0 end
+        _top  = 0
+        _free = {}
+    end
  
     local function load(path)
         local f = assert(io.open(path, "rb"), "cannot open for read: " .. path)
@@ -224,10 +231,7 @@ local World = (function()
                 :format(name, sz, Registry.sizeof(name)))
         end
  
-        -- wipe current state before restoring
-        for id = 1, _top do _arch[id].mask = 0 end
-        _top  = 0
-        _free = {}
+        reset()
  
         local buf = ffi.new("uint8_t[65536]")
         while true do
@@ -264,6 +268,7 @@ local World = (function()
         query_next       = query_next,
         save             = save,
         load             = load,
+        reset            = reset,
         arch             = _arch,
         top              = function() return _top end,
     }
@@ -464,6 +469,69 @@ function Type.iunpack(encoded, keys)
     return out
 end
 
+-- Fire-and-forget coroutine jobs that run alongside ECS systems.
+-- Jobs yield mid-work and resume each tick until complete.
+--
+-- Jobs.submit(fn)                  -- runs immediately next tick
+-- Jobs.submit(fn, priority)        -- lower priority = runs first
+-- Jobs.submit(fn, priority, delay) -- waits `delay` seconds before starting
+-- Jobs.tick(dt)                    -- call once per frame after scheduler:tick()
+ 
+local Jobs = (function()
+    local _queue   = {}   -- jobs waiting to start (including delayed ones)
+    local _running = {}   -- jobs active this tick
+    local _elapsed = 0    -- total time accumulated via tick(dt)
+ 
+    local function make_ctx()
+        return { yield = coroutine.yield }
+    end
+ 
+    local function submit(fn, priority, delay)
+        local ctx = make_ctx()
+        local co  = coroutine.create(function() fn(ctx) end)
+        _queue[#_queue + 1] = {
+            co       = co,
+            priority = priority or 0,
+            start_at = _elapsed + (delay or 0),
+        }
+    end
+ 
+    local function tick(dt)
+        _elapsed = _elapsed + (dt or 0)
+ 
+        -- promote jobs whose delay has elapsed into the running list
+        local still_waiting = {}
+        for _, entry in ipairs(_queue) do
+            if _elapsed >= entry.start_at then
+                _running[#_running + 1] = entry
+            else
+                still_waiting[#still_waiting + 1] = entry
+            end
+        end
+        _queue = still_waiting
+ 
+        table.sort(_running, function(a, b) return a.priority < b.priority end)
+ 
+        local carry = {}
+        for _, entry in ipairs(_running) do
+            local ok, err = coroutine.resume(entry.co)
+            if not ok then
+                io.stderr:write(("[Jobs] crashed: %s\n"):format(tostring(err)))
+            elseif coroutine.status(entry.co) ~= "dead" then
+                carry[#carry + 1] = entry
+            end
+        end
+ 
+        _running = carry
+    end
+ 
+    local function pending()
+        return #_running + #_queue
+    end
+ 
+    return { submit = submit, tick = tick, pending = pending }
+end)()
+
 -- Component
 -- DSL:
 --      Component "position" :with "float x, y;"
@@ -552,4 +620,5 @@ return {
     Scheduler = Scheduler,
     World     = World,
     EventBus  = EventBus,
+    Jobs      = Jobs
 }
