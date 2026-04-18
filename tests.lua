@@ -265,6 +265,13 @@ describe("Jobs")
         is_true(finished)
     end)
     
+describe("World.store")
+
+    it("store and retrieve data", function()
+        local id = World.spawn { position = { x = 0, y = 0 } }
+        World.store(id, { data = "hello" })
+        eq(World.store(id).data, "hello")
+    end)
 
 describe("System DSL")
 

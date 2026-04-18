@@ -4,6 +4,7 @@ Declarative ECS for LuaJIT.
 
 ## Benchmark
 
+```
 --- Stats: Concord ---
 Execution Time: 8.9916 seconds
 Memory Delta:   912.11 KB
@@ -23,6 +24,7 @@ Kernel: Linux 6.12.77-1-MANJARO
 CPU: Intel(R) Core(TM) i5-8265U (8) @ 3.90 GHz
 GPU: Intel UHD Graphics 620 @ 1.10 GHz [Integrated]
 Memory: 5.54 GiB / 7.64 GiB (73%)
+```
 
 ## Setup
 
@@ -177,7 +179,3 @@ end
 - `e.someComponent = value` raises , write into fields: `e.position.x = v`.
 - `World` and `EventBus` are module-level singletons; there is no multi-world support.
 - Event dispatch is synchronous , publishing inside a system affects the current tick immediately.
-
-## Roadmap
- - [ ] Add wipe state.
- - [ ] Add job system.
