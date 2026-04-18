@@ -64,6 +64,7 @@ local World = (function()
     local _arch  = ffi.new("ECS_Archetype[?]", MAX_ENTITIES)
     local _top   = 0   -- highest slot ever used
     local _free  = {}
+    local _store = {}
 
     local _arrays = Registry.arrays
 
@@ -258,6 +259,11 @@ local World = (function()
         f:close()
     end
 
+    local function store(id, data)
+        if data == nil then return _store[id] end
+        _store[id] = data
+    end
+
     return {
         spawn            = spawn,
         destroy          = destroy,
@@ -269,6 +275,7 @@ local World = (function()
         save             = save,
         load             = load,
         reset            = reset,
+        store            = store,
         arch             = _arch,
         top              = function() return _top end,
     }
