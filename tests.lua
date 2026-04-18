@@ -7,6 +7,7 @@ local System    = ecs.System
 local Scheduler = ecs.Scheduler
 local World     = ecs.World
 local EventBus  = ecs.EventBus
+local Jobs      = ecs.Jobs
 
 -- Harness
 
@@ -65,7 +66,7 @@ Component "health"   :with (T.Float "value")
 Component "lifetime" :with (T.Float "remaining")
 Component "tag"      :with (T.Int "id")
 
--- ─── Tests ───────────────────────────────────────────────────────────────────
+-- Tests
 
 describe("Registry")
 
@@ -189,6 +190,14 @@ describe("World.save / World.load")
         os.remove(test_filename)
     end)
 
+describe("World.reset")
+
+    it("reset clears all entities", function()
+        local id = World.spawn { position = { x = 1, y = 2 }, health = { value = 100 } }
+        World.reset()
+        is_false(find(0xFFFFFFFF, id) ~= nil, "entity should not exist after reset")
+    end)
+
 describe("World.query archetype filtering")
 
     it("query with full mask returns only matching entities", function()
@@ -225,6 +234,37 @@ describe("World.destroy")
         -- id2 may or may not equal id1 depending on free-list; just verify it is alive
         is_true(find(0xFFFFFFFF, id2) ~= nil)
     end)
+
+describe("Jobs")
+
+    it("submit and tick", function()
+        local started = false
+        local finished = false
+        Jobs.submit(function(ctx)
+            started = true
+            ctx.yield()
+            finished = true
+        end)
+        Jobs.tick(0.1)
+        is_true(started)
+        is_false(finished)
+        Jobs.tick(0.1)
+        is_true(finished)
+    end)
+
+    it("delay", function()
+        local finished = false
+        Jobs.submit(function(ctx)
+            finished = true
+        end, 0, 0.1)
+        Jobs.tick(0.05)
+        is_false(finished)
+        Jobs.tick(0.05)
+        is_false(finished)
+        Jobs.tick(0.1)
+        is_true(finished)
+    end)
+    
 
 describe("System DSL")
 

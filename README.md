@@ -2,6 +2,27 @@
 
 Declarative ECS for LuaJIT.
 
+## Benchmark
+
+--- Stats: Concord ---
+Execution Time: 8.9916 seconds
+Memory Delta:   912.11 KB
+Total Iterations: 10000
+99%  Compiled
+
+--- Stats: SliceOfLife ---
+Execution Time: 0.4497 seconds
+Memory Delta:   13.30 KB
+Total Iterations: 10000
+100%  Compiled
+
+specs:
+OS: Manjaro Linux x86_64
+Host: 81S9 (Lenovo IdeaPad S145-15IWL)
+Kernel: Linux 6.12.77-1-MANJARO
+CPU: Intel(R) Core(TM) i5-8265U (8) @ 3.90 GHz
+GPU: Intel UHD Graphics 620 @ 1.10 GHz [Integrated]
+Memory: 5.54 GiB / 7.64 GiB (73%)
 
 ## Setup
 
@@ -111,6 +132,35 @@ end
 
 -- on quit / checkpoint
 World.save("save.bin")
+```
+
+## Jobs
+
+```lua
+local Jobs = require "jobs"
+
+-- starts immediately
+Jobs.submit(function(job)
+    print("runs next tick")
+end)
+
+-- starts after 2 seconds
+Jobs.submit(function(job)
+    print("delayed start")
+    job.yield()
+    print("second tick after delay")
+end, 0, 2.0)
+
+-- high priority + delay
+Jobs.submit(function(job)
+    print("urgent, but wait 0.5s first")
+end, -1, 0.5)
+
+-- game loop
+while running do
+    scheduler:tick(dt)
+    Jobs.tick(dt)          -- dt drives the delay timer
+end
 ```
 
 **Constraints specific to save/load:**
