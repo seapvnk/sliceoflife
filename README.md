@@ -179,3 +179,12 @@ end
 - `e.someComponent = value` raises , write into fields: `e.position.x = v`.
 - `World` and `EventBus` are module-level singletons; there is no multi-world support.
 - Event dispatch is synchronous , publishing inside a system affects the current tick immediately.
+
+## Roadmap
+- [ ] Schedule functions that runs independently of entities
+- [ ] Save state as csv
+- [ ] Load state from csv
+- [ ] Archetype spawn should recycle dead entities of the same archetype
+- [ ] ORM-like query interface with get by id, get by component, get by archetype, map and filter
+- [ ] Replace store with plugins, to plug objects to manage stateful data
+- [ ] Add a proper documentation
