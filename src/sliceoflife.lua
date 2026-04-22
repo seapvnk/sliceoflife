@@ -319,6 +319,23 @@ end
 local _basic_types = { Float = "float", Int = "int", Word = "uint64_t" }
 for k, v in pairs(_basic_types) do Type[k] = function(...) return _type(v, ...) end end
 
+-- usage: T.Struct(T.Int, {
+--   field_set_1 = {"field1", "field2", ...},
+--   field_set_2 = {"field3", "field4", ...},
+-- })
+Type._structs = {}
+function Type.Structs(name, typ, fields_table)
+    assert(typ == Type.Int or typ == Type.Float, "struct must be of type int or float")
+    Type._structs[name] = { typ = typ, fields = fields_table }
+
+    local keys = {}
+    for key, _ in pairs(fields_table) do keys[#keys+1] = key end
+
+    return Type.Word(unpack(keys))
+end
+
+function Type.is_struct(name) return Type._structs[name] ~= nil end
+
 local MIN_BOUND = -1e6
 local MAX_BOUND =  1e6
  
@@ -441,7 +458,7 @@ function Type.ipack(t)
     assert(n >= 1 and n <= 15, "ipack supports 1–15 fields")
  
     local bits_per = math.floor(60 / n)
-    local levels   = U(2^bits_per - 1)
+    local levels   = POW2[bits_per] - U(1)
  
     local word = U(n) * POW2[60]
     for i, k in ipairs(keys) do
@@ -466,7 +483,7 @@ function Type.iunpack(encoded, keys)
         ("iunpack: encoded has %d fields, keys list has %d"):format(n_dec, n))
  
     local bits_per = math.floor(60 / n)
-    local mask_p   = U(2^bits_per - 1)
+    local mask_p   = POW2[bits_per] - U(1)
  
     local out = {}
     for i, k in ipairs(keys) do
@@ -474,6 +491,36 @@ function Type.iunpack(encoded, keys)
         out[k] = tonumber(shifted % (mask_p + U(1)))
     end
     return out
+end
+
+
+function Type.spack(name, data)
+    assert(Type._structs[name], "struct not found: " .. name)
+    local struct = Type._structs[name]
+
+    local packed_fieldsets = {}
+    for k, v in pairs(struct.fields) do
+        if struct.typ == Type.Int then
+            packed_fieldsets[k] = Type.ipack(data[k] or 0)
+        else
+            packed_fieldsets[k] = Type.pack(data[k] or 0.0)
+        end
+    end
+    return packed_fieldsets
+end
+
+function Type.sunpack(name, data)
+    assert(Type._structs[name], "struct not found: " .. name)
+    local struct = Type._structs[name]
+    local unpacked_fieldsets = {}
+    for k, v in pairs(struct.fields) do
+        if struct.typ == Type.Int then
+            unpacked_fieldsets[k] = Type.iunpack(data[k], struct.fields[k])
+        else
+            unpacked_fieldsets[k] = Type.unpack(data[k], struct.fields[k])
+        end
+    end
+    return unpacked_fieldsets
 end
 
 -- Fire-and-forget coroutine jobs that run alongside ECS systems.
@@ -620,6 +667,107 @@ end
 
 function Scheduler:count() return #self._systems end
 
+-- Archetype
+-- Chainable :with(), :extends()
+-- local Player = Archetype.new()
+--     :extends(Base)
+--     :with("position", { x = 0, y = 0 })
+--     :with("velocity", { x = 0, y = 0 })
+--     :with("health",   { value = 100 })
+--     :with("lifetime", { remaining = 10 })
+--     :with("tag",      { id = 1 })
+--     :rule(function(e, args) e.position.x = args.x end)
+--     :lock()
+
+
+local Archetype = {}
+Archetype.__index = Archetype
+
+function Archetype.new()
+    return setmetatable({
+        _components = {},
+        _rules      = {},
+        _locked     = false,
+        _carry      = nil,
+        _args       = {}
+    }, Archetype)
+end
+
+function Archetype:with(name, defaults)
+    assert(Registry.known(name), "component '" .. name .. "' does not exist")
+    assert(not self._locked, "cannot modify locked archetype")
+    self._components[name] = defaults
+    return self
+end
+
+function Archetype:rule(fn)
+    assert(not self._locked, "cannot modify locked archetype")
+    self._rules[#self._rules + 1] = fn
+    return self
+end
+
+function Archetype:lock()
+    self._locked = true
+    return self
+end
+
+function Archetype:extends(archetype)
+    assert(not self._locked, "cannot modify locked archetype")
+    for name, defaults in pairs(archetype._components) do
+        self._components[name] = defaults
+    end
+    return self
+end
+
+function Archetype:build(many, args)
+    local n = many or 1
+    local carry = {}
+
+    local function copy(t)
+        if type(t) ~= 'table' then return t end
+        local r = {}
+        for k, v in pairs(t) do r[k] = copy(v) end
+        return r
+    end
+
+    for i = 1, n do
+        local ent = {}
+        for name, defaults in pairs(self._components) do
+            ent[name] = copy(defaults)
+        end
+        table.insert(carry, ent)
+    end
+    self._carry = carry
+    self._args = args
+    return self
+end
+
+function Archetype:transform(fn)
+    assert(self._carry, "archetype build must have been called first")
+    for i = 1, #self._carry do
+        self._carry[i] = fn(self._carry[i])
+    end
+    return self
+end
+
+function Archetype:spawn()
+    if not self._carry then self:build(1) end
+    local ids = {}
+    for i = 1, #self._rules do
+        for j = 1, #self._carry do
+            self._rules[i](self._carry[j], self._args)
+            for component, value in pairs(self._carry[j]) do
+                if Type.is_struct(component) then
+                    self._carry[j][component] = Type.spack(component, value)
+                end
+            end
+            table.insert(ids, World.spawn(self._carry[j]))
+        end
+    end
+    self._carry, self._args = nil, {}
+    return ids
+end
+
 return {
     Type      = Type,
     Component = Component,
@@ -627,5 +775,6 @@ return {
     Scheduler = Scheduler,
     World     = World,
     EventBus  = EventBus,
+    Archetype = Archetype,
     Jobs      = Jobs
 }

@@ -65,6 +65,7 @@ Component "velocity" :with (T.Float("x", "y"))
 Component "health"   :with (T.Float "value")
 Component "lifetime" :with (T.Float "remaining")
 Component "tag"      :with (T.Int "id")
+Component "hero_stats" :with (T.Structs("hero_stats", T.Int, { attr = {"str", "dex", "int"}, mod = {"attack", "defense"} }))
 
 -- Tests
 
@@ -102,6 +103,21 @@ describe("Type")
         eq(decoded.con, 10)
         eq(decoded.wis, 10)
         eq(decoded.cha, 10)
+    end)
+
+    it("spack and sunpack on int structs", function()
+        local data = {
+            attr = { str = 15, dex = 14, int = 10 },
+            mod  = { attack = 12, defense = 8 }
+        }
+        local packed = T.spack("hero_stats", data)
+        local unpacked = T.sunpack("hero_stats", packed)
+        
+        eq(unpacked.attr.str, 15)
+        eq(unpacked.attr.dex, 14)
+        eq(unpacked.attr.int, 10)
+        eq(unpacked.mod.attack, 12)
+        eq(unpacked.mod.defense, 8)
     end)
 
 describe("World.spawn / proxy")
@@ -431,6 +447,33 @@ describe("EventBus")
         Scheduler.new():register(sys):tick(1/60)
         is_true(fired, "entity_died event not fired")
         EventBus.unsubscribe_all("died")
+    end)
+
+describe("Archetypes")
+
+    it("creates an archetype with a struct component and spawns it", function()
+        local HeroArch = ecs.Archetype.new()
+            :with("position", { x = 0, y = 0 })
+            :with("hero_stats", { attr = { str=10, dex=10, int=10 }, mod = { attack=1, defense=1 } })
+            :rule(function(e, args)
+                e.position.x = args.x or 0
+                e.position.y = args.y or 0
+                e.hero_stats.attr.str = args.str or 10
+            end)
+            :lock()
+            
+        local ids = HeroArch:build(1, { x = 10, y = 20, str = 18 }):spawn()
+        local id = ids[1]
+        local e = find(0xFFFFFFFF, id)
+        
+        is_true(e ~= nil)
+        near(e.position.x, 10)
+        near(e.position.y, 20)
+        
+        local unpacked = T.sunpack("hero_stats", { attr = e.hero_stats.attr, mod = e.hero_stats.mod })
+        eq(unpacked.attr.str, 18)
+        eq(unpacked.attr.dex, 10)
+        eq(unpacked.mod.attack, 1)
     end)
 
 -- Results
