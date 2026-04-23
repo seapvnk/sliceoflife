@@ -185,6 +185,6 @@ end
 - [ ] Save state as csv
 - [ ] Load state from csv
 - [ ] Archetype spawn should recycle dead entities of the same archetype
-- [ ] ORM-like query interface with get by id, get by component, get by archetype, map and filter
+- [x] ORM-like query interface with get by id, get by component, get by archetype, map and filter
 - [ ] Replace store with plugins, to plug objects to manage stateful data
 - [ ] Add a proper documentation
