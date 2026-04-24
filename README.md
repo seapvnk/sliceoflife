@@ -38,132 +38,192 @@ local EventBus  = ecs.EventBus
 local T         = ecs.Type
 ```
 
-## Components
+## Components & Types
 
-Declare once at startup. Body is a raw C struct body.
-
+### Basic Types
+You can define structs and fields using the `Type` DSL for bit-packing to save memory:
 ```lua
-Component "position" :with (T.Float("x", "y"))
-Component "health"   :with (T.Float("value"))
+local T = require("sliceoflife").Type
+
+-- Available basic types
+T.Float("x")
+T.Int("id")
+T.Word("flags")
+
+-- Nested bitpacked structs
+local Vector2Struct = T.Structs("Vector2", T.Float, {
+    position = {"x", "y"},
+    velocity = {"dx", "dy"}
+})
 ```
 
-## Entities
+### Pack and Unpack
+You can pack and unpack values using the `pack` and `unpack` functions:
+```lua
+local ECS = require("sliceoflife")
+local T = ECS.Type
+
+local packed_float_data = T.pack({ x = 10.5, y = 2.5, z = 3.5 })
+local unpacked_float_data = T.unpack(packed_data)
+
+local packed_int_data = T.ipack({ x = 10, y = 2, z = 3 })
+local unpacked_int_data = T.iunpack(packed_data)
+```
+
+### Components
+Components describe data layout in your entities.
+```lua
+local ECS = require("sliceoflife")
+local Component = ECS.Component
+local T = ECS.Type
+
+Component "position" :with "float x, y;"
+Component "velocity" :with "float x, y;"
+-- Using Type DSL
+Component "transform" :with (T.Float("x", "y", "rotation"))
+```
+
+## The World
+
+The `World` is a singleton that manages entity ID allocation, components, and querying.
 
 ```lua
-local id = World.spawn {
+local World = require("sliceoflife").World
+
+-- Spawning an entity
+local entity_id = World.spawn({
     position = { x = 0, y = 0 },
-    health   = { value = 100  },
-}
+    velocity = { x = 1, y = 1 }
+})
 
-World.add_component(id, "velocity", { x = 10, y = 0 })
-World.remove_component(id, "velocity")
-World.has_component(id, "health")   -- true / false
-World.destroy(id)
+-- Adding and removing components dynamically
+World.add_component(entity_id, "health", { value = 100 })
+World.remove_component(entity_id, "velocity")
+
+-- Destroying an entity
+World.destroy(entity_id)
+
+-- Saving and loading the world state
+World.save("save_file.dat")
+World.load("save_file.dat")
+
+-- storing and retrieving data
+World.store("my_global", 10)
+local my_global = World.store("my_global") -- 10
 ```
 
-## Systems
+## Systems and Scheduler
 
-A function that receives one entity and a context bag. No loops, no yields.
+### System Definition
+Systems define behavior for a specific cross-section of components.
 
 ```lua
-local Physics = System "physics"
+local System = require("sliceoflife").System
+
+local MovementSystem = System "movement"
     :needs("position", "velocity")
     :does(function(e, ctx)
+        -- `e` is an entity proxy giving direct access to component fields
         e.position.x = e.position.x + e.velocity.x * ctx.dt
         e.position.y = e.position.y + e.velocity.y * ctx.dt
     end)
 ```
 
-`ctx` fields: `dt`, `frame`, `world`, `bus`.
-
-Entity fields (`e.position`, `e.health`, …) are live FFI pointers , write directly into their fields.
-
-## Scheduler
+### Scheduler
+The Scheduler orchestrates systems and passes the context to them.
 
 ```lua
+local Scheduler = require("sliceoflife").Scheduler
 local sched = Scheduler.new()
-    :register(Physics)
-    :register(Decay)
+    -- Register an ECS system
+    :register(MovementSystem)
+    -- Register a global procedure (runs independently of entities)
+    :register(function(ctx) print("Frame started: ", ctx.frame) end)
 
--- game loop
-sched:tick(dt)
+-- Execute in your game loop
+sched:tick(0.016) -- pass delta time
 ```
 
-`:register` is chainable. Each system runs once per matching entity per `tick`.
-
-
-## EventBus
+## Archetypes
+Archetypes define blueprints for entities, making mass spawning highly efficient.
 
 ```lua
-EventBus.subscribe("entity_died", function(data)
-    print("died:", data.id)
-end)
+local Archetype = require("sliceoflife").Archetype
 
--- inside a system:
-ctx.bus.publish("entity_died", { id = e.id })
+local BaseEnemy = Archetype.new()
+    :with("health", { value = 100 })
 
-EventBus.unsubscribe_all("entity_died")
+local SmallEnemy = Archetype.new()
+    :extends(BaseEnemy)       -- inherit components from another archetype
+    :with("position", { x = 0, y = 0 })
+    :with("velocity", { x = 0, y = 0 })
+    :rule(function(e, args)   -- modify specific fields on spawn
+        e.position.x = args.spawn_x 
+        e.velocity.x = math.random() * 10
+    end)
+    :lock()
+
+-- Usage: Build and Spawn
+local enemy_ids = SmallEnemy
+    :build(10, { spawn_x = 5 }) -- prepares 10 entity instances
+    :spawn()                    -- commits them to the World and returns a table of IDs
 ```
 
-Dispatch is synchronous , subscribers fire immediately inside `publish`.
+## Query Builder
 
-
-## Save / Load
-
-```lua
-World.save("world.bin")   -- snapshot every live entity to a binary file
-World.load("world.bin")   -- wipe current state and restore from file
-```
-
-`save` writes every entity whose archetype mask is non-zero , i.e. every entity that has not been destroyed. `load` wipes all current entities first, then restores the snapshot exactly as it was saved. Entity slot ids are preserved, so any id you cached in Lua remains valid after loading.
-
-**Schema validation.** Before restoring any data, `load` checks that the component names and struct sizes in the file match the current Registry exactly. If you rename a component or change its fields between saves, `load` raises a descriptive error instead of silently corrupting data.
-
-**Typical pattern:**
+Query and manipulate entities fluently without explicit loops.
 
 ```lua
--- startup
-Component "position" :with (T.Float("x", "y"))
-Component "health"   :with (T.Float("value"))
-
-if file_exists("save.bin") then
-    World.load("save.bin")   -- must come before any World.spawn
-else
-    World.spawn { position = { x = 0, y = 0 }, health = { value = 100 } }
+-- Fetching all entities matching an archetype
+for entity in SmallEnemy:get_all() do
+    print(entity.id, entity.position.x)
 end
 
--- on quit / checkpoint
-World.save("save.bin")
+-- Chained queries equivalent to an ORM
+SmallEnemy:query()
+    :where({ id__in = { 1, 2, 3 } })
+    :not_()
+    :where({ health = 0 })  -- find alive ones (health != 0 because of not_())
+    :take(5)                -- limit result count
+    :update({ velocity = { x = 0, y = 0 } })
+
+-- Direct deletion via query chaining
+SmallEnemy:query():where({ health = 0 }):delete()
 ```
 
-## Jobs
+## Event Bus
+A synchronous global event messenger.
 
 ```lua
-local Jobs = require "jobs"
+local EventBus = require("sliceoflife").EventBus
 
--- starts immediately
-Jobs.submit(function(job)
-    print("runs next tick")
+EventBus.subscribe("on_player_death", function(data)
+    print("Player died at: ", data.x, data.y)
 end)
 
--- starts after 2 seconds
-Jobs.submit(function(job)
-    print("delayed start")
-    job.yield()
-    print("second tick after delay")
-end, 0, 2.0)
-
--- high priority + delay
-Jobs.submit(function(job)
-    print("urgent, but wait 0.5s first")
-end, -1, 0.5)
-
--- game loop
-while running do
-    scheduler:tick(dt)
-    Jobs.tick(dt)          -- dt drives the delay timer
-end
+EventBus.publish("on_player_death", { x = 10, y = 20 })
 ```
+
+## Job System
+A job runner for fire-and-forget logic that spans multiple frames.
+
+```lua
+local Jobs = require("sliceoflife").Jobs
+
+-- Submit a job (`ctx.yield` returns execution to the main game engine)
+Jobs.submit(function(ctx)
+    print("Job started!")
+    ctx.yield()
+    print("Job resumed next tick!")
+end)
+
+-- Job with priority and delay
+Jobs.submit(some_func, 10, 5.0) -- priority 10 (lower is run first), starts after 5 seconds
+
+-- Required: run the job tick in your main game loop alongside scheduler tick
+Jobs.tick(0.016)
+```
+
 
 **Constraints specific to save/load:**
 - `load` must be called before any `World.spawn` , it restores slots by id directly and will collide with freshly allocated ones.
@@ -184,7 +244,5 @@ end
 - [x] Schedule functions that runs independently of entities
 - [ ] Save state as csv
 - [ ] Load state from csv
-- [ ] Archetype spawn should recycle dead entities of the same archetype
 - [x] ORM-like query interface with get by id, get by component, get by archetype, map and filter
-- [ ] Replace store with plugins, to plug objects to manage stateful data
-- [ ] Add a proper documentation
+- [x] Add a proper documentation
