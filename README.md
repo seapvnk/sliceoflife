@@ -181,7 +181,7 @@ end
 - Event dispatch is synchronous , publishing inside a system affects the current tick immediately.
 
 ## Roadmap
-- [ ] Schedule functions that runs independently of entities
+- [x] Schedule functions that runs independently of entities
 - [ ] Save state as csv
 - [ ] Load state from csv
 - [ ] Archetype spawn should recycle dead entities of the same archetype
