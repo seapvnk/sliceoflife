@@ -631,6 +631,15 @@ function Scheduler.new()
 end
 
 function Scheduler:register(sys)
+    if type(sys) == "function" then
+        table.insert(self._systems, {
+            _fn = sys,
+            is_global = true,
+            ctx = { dt = 0, frame = 0, world = World, bus = EventBus }
+        })
+        return self
+    end
+
     assert(sys._fn and sys.mask,
         "system '" .. sys.name .. "' must call :needs() and :does() before registering")
 
@@ -650,16 +659,21 @@ function Scheduler:tick(dt)
         ctx.dt = dt
         ctx.frame = ctx.frame + 1
         local fn = sys._fn
-        local req = sys.mask
-        local state = sys.state
-        local proxy = state.proxy
-        local top = World.top()
 
-        for i = 1, top do
-            local em = arch[i].mask
-            if em ~= 0 and band(em, req) == req then
-                state[1] = i
-                fn(proxy, ctx)
+        if sys.is_global then
+            fn(ctx)
+        else
+            local req = sys.mask
+            local state = sys.state
+            local proxy = state.proxy
+            local top = World.top()
+    
+            for i = 1, top do
+                local em = arch[i].mask
+                if em ~= 0 and band(em, req) == req then
+                    state[1] = i
+                    fn(proxy, ctx)
+                end
             end
         end
     end

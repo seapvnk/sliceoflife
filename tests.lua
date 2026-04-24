@@ -383,6 +383,23 @@ describe("Scheduler:tick — integration")
         near(seen, 0.12345)
     end)
 
+    it("can register single global functions that run once per tick with ctx", function()
+        local executed = 0
+        local received_dt = 0
+        local sched = Scheduler.new()
+        
+        sched:register(function(ctx)
+            executed = executed + 1
+            received_dt = ctx.dt
+        end)
+        
+        sched:tick(0.016)
+        sched:tick(0.016)
+        
+        eq(executed, 2)
+        eq(received_dt, 0.016)
+    end)
+
     it("two systems on the same entity see each other's writes", function()
         local id = World.spawn {
             position = { x = 0,   y = 0   },
