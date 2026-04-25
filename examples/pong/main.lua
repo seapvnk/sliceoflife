@@ -8,22 +8,15 @@ Component "paddle"   :with (T.Int("id"))
 
 local lp = love.physics
 local world_box2d = lp.newWorld(0, 0, true)
-_G.Bodies = {}
 
-
-local PhysicsStep = System "physics_step"
-    :does(function(_, ctx)
-        if ctx.frame_updated ~= ctx.frame then
-            world_box2d:update(ctx.dt)
-            ctx.frame_updated = ctx.frame
-        end
-    end)
+-- Replaces _G.Bodies with World.store pattern
+World.store("Bodies", {})
 
 -- System: Map Paddle Input to Box2D Velocity
 local PaddleInput = System "paddle_input"
     :needs("paddle")
     :does(function(e, ctx)
-        local body = _G.Bodies[e.id]
+        local body = World.store("Bodies")[e.id]
         if body and e.paddle.id == 1 then
             local vy = 0
             if love.keyboard.isDown("w") then vy = -500 end
@@ -36,7 +29,7 @@ local PaddleInput = System "paddle_input"
 local SyncPhysics = System "sync"
     :needs("position", "physics")
     :does(function(e)
-        local body = _G.Bodies[e.id]
+        local body = World.store("Bodies")[e.id]
         if body then
             local x, y = body:getPosition()
             e.position.x, e.position.y = x, y
@@ -50,7 +43,10 @@ local Render = System "render"
     end)
 
 local logic_sched = Scheduler.new()
-    :register(PhysicsStep)
+    -- Register a global procedure (runs independently of entities)
+    :register(function(ctx)
+        world_box2d:update(ctx.dt)
+    end)
     :register(PaddleInput)
     :register(SyncPhysics)
 
@@ -71,7 +67,7 @@ local function spawn_phys(x, y, w, h, p_type, is_ball)
         body:setLinearVelocity(300, 300)
     end
     
-    _G.Bodies[id] = body
+    World.store("Bodies")[id] = body
     return id
 end
 
