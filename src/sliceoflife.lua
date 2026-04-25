@@ -700,7 +700,7 @@ Archetype.__index = Archetype
 function Archetype.new()
     return setmetatable({
         _components = {},
-        _rules      = {},
+        _rules      = {function(e, args) return e end},
         _locked     = false,
         _carry      = nil,
         _args       = {}
