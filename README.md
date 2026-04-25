@@ -29,7 +29,7 @@ Memory: 5.54 GiB / 7.64 GiB (73%)
 ## Setup
 
 ```lua
-local ecs       = require "ecs"
+local ecs       = require "sliceoflife"
 local Component = ecs.Component
 local System    = ecs.System
 local Scheduler = ecs.Scheduler
@@ -64,10 +64,10 @@ local ECS = require("sliceoflife")
 local T = ECS.Type
 
 local packed_float_data = T.pack({ x = 10.5, y = 2.5, z = 3.5 })
-local unpacked_float_data = T.unpack(packed_data)
+local unpacked_float_data = T.unpack(packed_data, {"x", "y", "z"})
 
 local packed_int_data = T.ipack({ x = 10, y = 2, z = 3 })
-local unpacked_int_data = T.iunpack(packed_data)
+local unpacked_int_data = T.iunpack(packed_data, {"x", "y", "z"})
 ```
 
 ### Components
