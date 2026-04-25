@@ -631,6 +631,15 @@ function Scheduler.new()
 end
 
 function Scheduler:register(sys)
+    if type(sys) == "function" then
+        table.insert(self._systems, {
+            _fn = sys,
+            is_global = true,
+            ctx = { dt = 0, frame = 0, world = World, bus = EventBus }
+        })
+        return self
+    end
+
     assert(sys._fn and sys.mask,
         "system '" .. sys.name .. "' must call :needs() and :does() before registering")
 
@@ -650,16 +659,21 @@ function Scheduler:tick(dt)
         ctx.dt = dt
         ctx.frame = ctx.frame + 1
         local fn = sys._fn
-        local req = sys.mask
-        local state = sys.state
-        local proxy = state.proxy
-        local top = World.top()
 
-        for i = 1, top do
-            local em = arch[i].mask
-            if em ~= 0 and band(em, req) == req then
-                state[1] = i
-                fn(proxy, ctx)
+        if sys.is_global then
+            fn(ctx)
+        else
+            local req = sys.mask
+            local state = sys.state
+            local proxy = state.proxy
+            local top = World.top()
+    
+            for i = 1, top do
+                local em = arch[i].mask
+                if em ~= 0 and band(em, req) == req then
+                    state[1] = i
+                    fn(proxy, ctx)
+                end
             end
         end
     end
@@ -768,13 +782,227 @@ function Archetype:spawn()
     return ids
 end
 
+local Query = {}
+Query.__index = Query
+
+function Query.new()
+    return setmetatable({ _wheres = {}, _is_not = false }, Query)
+end
+
+function Query:where(cond)
+    local negated = self._is_not
+    self._is_not = false
+    
+    local c = {}
+    for k, v in pairs(cond) do c[k] = v end
+    c._not = negated
+    
+    table.insert(self._wheres, c)
+    return self
+end
+
+function Query:not_()
+    self._is_not = true
+    return self
+end
+
+function Query:and_(other)
+    for _, w in ipairs(other._wheres) do
+        table.insert(self._wheres, w)
+    end
+    return self
+end
+
+function Query:get()
+    local req_mask = 0
+
+    for _, cond in ipairs(self._wheres) do
+        local negate = cond._not or false
+        if not negate then
+            for k, v in pairs(cond) do
+                if k == "component__in" then
+                    req_mask = bit.bor(req_mask, Registry.mask(v))
+                elseif k == "archetype__in" then
+                    for _, arch in ipairs(v) do
+                        local names = {}
+                        for c_name in pairs(arch._components) do
+                            table.insert(names, c_name)
+                        end
+                        if #names > 0 then
+                            req_mask = bit.bor(req_mask, Registry.mask(names))
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return req_mask
+end
+
+local ArchetypeQuery = {}
+ArchetypeQuery.__index = ArchetypeQuery
+
+function ArchetypeQuery.new(archetype)
+    return setmetatable({
+        _archetype = archetype,
+        _query = Query.new(),
+        _limit = nil,
+    }, ArchetypeQuery)
+end
+
+function ArchetypeQuery:where(cond)
+    self._query:where(cond)
+    return self
+end
+
+function ArchetypeQuery:not_()
+    self._query:not_()
+    return self
+end
+
+function ArchetypeQuery:and_(other)
+    if other._query then
+        self._query:and_(other._query)
+    else
+        self._query:and_(other)
+    end
+    return self
+end
+
+function ArchetypeQuery:take(n)
+    self._limit = n
+    return self
+end
+
+function ArchetypeQuery:_matches(e)
+    for _, cond in ipairs(self._query._wheres) do
+        local negate = cond._not or false
+        local block_pass = true
+        
+        for k, v in pairs(cond) do
+            if k == "id" then
+                if e.id ~= v then block_pass = false; break end
+            elseif k == "id__not" then
+                if e.id == v then block_pass = false; break end
+            elseif k == "id__in" then
+                local found = false
+                for _, id in ipairs(v) do
+                    if e.id == id then found = true; break end
+                end
+                if not found then block_pass = false; break end
+            elseif k == "id__not_in" then
+                for _, id in ipairs(v) do
+                    if e.id == id then block_pass = false; break end
+                end
+            elseif k == "component__in" then
+                local m = Registry.mask(v)
+                local em = World.arch[e.id].mask
+                if bit.band(em, m) ~= m then block_pass = false; break end
+            elseif k == "archetype__in" then
+                local m = 0
+                for _, arch in ipairs(v) do
+                    local names = {}
+                    for c_name in pairs(arch._components) do
+                        table.insert(names, c_name)
+                    end
+                    if #names > 0 then
+                        m = bit.bor(m, Registry.mask(names))
+                    end
+                end
+                if m ~= 0 then
+                    local em = World.arch[e.id].mask
+                    if bit.band(em, m) ~= m then block_pass = false; break end
+                end
+            end
+        end
+        
+        if negate then
+            block_pass = not block_pass
+        end
+        
+        if not block_pass then return false end
+    end
+    
+    return true
+end
+
+function ArchetypeQuery:get()
+    local req_mask = self._query:get()
+    
+    if self._archetype then
+        local names = {}
+        for c in pairs(self._archetype._components) do
+            table.insert(names, c)
+        end
+        if #names > 0 then
+            req_mask = bit.bor(req_mask, Registry.mask(names))
+        end
+    end
+
+    local query_next, state, _ = World.query(req_mask)
+    local count = 0
+    local limit = self._limit
+
+    local function filtered_next()
+        if limit and count >= limit then return nil end
+        
+        while true do
+            local e = query_next(state, nil)
+            if not e then return nil end
+            
+            if self:_matches(e) then
+                count = count + 1
+                return e
+            end
+        end
+    end
+    
+    return filtered_next
+end
+
+function ArchetypeQuery:update(data)
+    for e in self:get() do
+        for comp_name, comp_data in pairs(data) do
+            if World.has_component(e.id, comp_name) then
+                local arr = Registry.array(comp_name)
+                for field, v in pairs(comp_data) do
+                    arr[e.id][field] = v
+                end
+            else
+                World.add_component(e.id, comp_name, comp_data)
+            end
+        end
+    end
+end
+
+function ArchetypeQuery:delete()
+    local ids_to_delete = {}
+    for e in self:get() do
+        table.insert(ids_to_delete, e.id)
+    end
+    for _, id in ipairs(ids_to_delete) do
+        World.destroy(id)
+    end
+end
+
+function Archetype:query()
+    return ArchetypeQuery.new(self)
+end
+
+function Archetype:get_all()
+    return self:query():get()
+end
+
 return {
-    Type      = Type,
-    Component = Component,
-    System    = System,
-    Scheduler = Scheduler,
-    World     = World,
-    EventBus  = EventBus,
-    Archetype = Archetype,
-    Jobs      = Jobs
+    Type           = Type,
+    Component      = Component,
+    System         = System,
+    Scheduler      = Scheduler,
+    World          = World,
+    EventBus       = EventBus,
+    Archetype      = Archetype,
+    Jobs           = Jobs,
+    Query          = Query,
+    ArchetypeQuery = ArchetypeQuery
 }

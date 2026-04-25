@@ -383,6 +383,23 @@ describe("Scheduler:tick — integration")
         near(seen, 0.12345)
     end)
 
+    it("can register single global functions that run once per tick with ctx", function()
+        local executed = 0
+        local received_dt = 0
+        local sched = Scheduler.new()
+        
+        sched:register(function(ctx)
+            executed = executed + 1
+            received_dt = ctx.dt
+        end)
+        
+        sched:tick(0.016)
+        sched:tick(0.016)
+        
+        eq(executed, 2)
+        eq(received_dt, 0.016)
+    end)
+
     it("two systems on the same entity see each other's writes", function()
         local id = World.spawn {
             position = { x = 0,   y = 0   },
@@ -474,6 +491,87 @@ describe("Archetypes")
         eq(unpacked.attr.str, 18)
         eq(unpacked.attr.dex, 10)
         eq(unpacked.mod.attack, 1)
+    end)
+
+describe("Query")
+
+    it("where clauses are correctly stored and negate applies to the next", function()
+        local q = ecs.Query.new():where({ id = 10 }):not_():where({ component__in = { "position" } })
+        local req_mask = q:get()
+        -- id = 10 is positive
+        -- position is negated -> req_mask should be 0 since it is negated
+        is_true(req_mask == 0)
+    end)
+
+    it("and_ merges queries", function()
+        local q1 = ecs.Query.new():where({ id = 1 })
+        local q2 = ecs.Query.new():where({ id__not = 2 })
+        q1:and_(q2)
+        local rm = q1:get()
+        is_true(#q1._wheres == 2)
+    end)
+
+describe("ArchetypeQuery")
+
+    it("get() filters appropriately and take(n) limits results", function()
+        ecs.World.reset()
+        local a = ecs.World.spawn { position = { x=1, y=2 }, health = { value = 1 } }
+        local b = ecs.World.spawn { position = { x=3, y=4 } }
+        local c = ecs.World.spawn { position = { x=5, y=6 } }
+        
+        local DummyArch = ecs.Archetype.new():with("position", {x=0,y=0})
+        
+        -- get_all should return all 3
+        local i = 0
+        for _ in DummyArch:get_all() do i = i + 1 end
+        eq(i, 3)
+
+        -- take(2) limits to 2
+        i = 0
+        for _ in DummyArch:query():take(2):get() do i = i + 1 end
+        eq(i, 2)
+
+        -- where({ id__not_in })
+        i = 0
+        for e in DummyArch:query():where({ id__not_in = {a, b} }):get() do
+            i = i + 1
+            eq(e.id, c)
+        end
+        eq(i, 1)
+        
+        -- component__in positive
+        i = 0
+        for e in DummyArch:query():where({ component__in = { "health" } }):get() do
+            i = i + 1
+            eq(e.id, a)
+        end
+        eq(i, 1)
+    end)
+
+    it("update() modifies components", function()
+        ecs.World.reset()
+        ecs.World.spawn { position = { x=1, y=2 } }
+        ecs.World.spawn { position = { x=3, y=4 } }
+        
+        local DummyArch = ecs.Archetype.new():with("position", {x=0,y=0})
+        DummyArch:query():update({ position = { x = 99 } })
+        
+        for e in DummyArch:get_all() do
+            eq(e.position.x, 99)
+        end
+    end)
+
+    it("delete() removes components", function()
+        ecs.World.reset()
+        ecs.World.spawn { position = { x=1, y=2 } }
+        ecs.World.spawn { position = { x=3, y=4 } }
+        
+        local DummyArch = ecs.Archetype.new():with("position", {x=0,y=0})
+        DummyArch:query():delete()
+        
+        local i = 0
+        for _ in DummyArch:get_all() do i = i + 1 end
+        eq(i, 0)
     end)
 
 -- Results
