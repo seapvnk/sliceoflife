@@ -764,18 +764,31 @@ function Archetype:transform(fn)
     return self
 end
 
+function Archetype:on_spawn(fn)
+    assert(not self._locked, "cannot modify locked archetype")
+    self._on_spawn_hooks = self._on_spawn_hooks or {}
+    self._on_spawn_hooks[#self._on_spawn_hooks + 1] = fn
+    return self
+end
+
 function Archetype:spawn()
     if not self._carry then self:build(1) end
     local ids = {}
-    for i = 1, #self._rules do
-        for j = 1, #self._carry do
+    for j = 1, #self._carry do
+        for i = 1, #self._rules do
             self._rules[i](self._carry[j], self._args)
-            for component, value in pairs(self._carry[j]) do
-                if Type.is_struct(component) then
-                    self._carry[j][component] = Type.spack(component, value)
-                end
+        end
+        for component, value in pairs(self._carry[j]) do
+            if Type.is_struct(component) then
+                self._carry[j][component] = Type.spack(component, value)
             end
-            table.insert(ids, World.spawn(self._carry[j]))
+        end
+        local id = World.spawn(self._carry[j])
+        table.insert(ids, id)
+        if self._on_spawn_hooks then
+            for k = 1, #self._on_spawn_hooks do
+                self._on_spawn_hooks[k](id, self._carry[j], self._args)
+            end
         end
     end
     self._carry, self._args = nil, {}
