@@ -469,6 +469,7 @@ describe("EventBus")
 describe("Archetypes")
 
     it("creates an archetype with a struct component and spawns it", function()
+        local on_spawn_called = false
         local HeroArch = ecs.Archetype.new()
             :with("position", { x = 0, y = 0 })
             :with("hero_stats", { attr = { str=10, dex=10, int=10 }, mod = { attack=1, defense=1 } })
@@ -476,6 +477,9 @@ describe("Archetypes")
                 e.position.x = args.x or 0
                 e.position.y = args.y or 0
                 e.hero_stats.attr.str = args.str or 10
+            end)
+            :on_spawn(function(e, args)
+                on_spawn_called = true
             end)
             :lock()
             
@@ -491,6 +495,7 @@ describe("Archetypes")
         eq(unpacked.attr.str, 18)
         eq(unpacked.attr.dex, 10)
         eq(unpacked.mod.attack, 1)
+        eq(on_spawn_called, true)
     end)
 
 describe("Query")
