@@ -523,6 +523,23 @@ function Type.sunpack(name, data)
     return unpacked_fieldsets
 end
 
+Type._enums = {}
+
+function Type.enum(name, values)
+    if type(values) == "table" then
+        local enum = {}
+        for i, v in ipairs(values) do table.insert(enum, v) end
+        Type._enums[name] = enum
+        return
+    end
+
+    if Type._enums[name] == nil then return nil end
+    return Type._enums[name][values]
+end
+
+-- Type.enum("Color", { "red", "green", "blue" })
+-- Type.enum("Color", 1) --  "red"
+
 -- Fire-and-forget coroutine jobs that run alongside ECS systems.
 -- Jobs yield mid-work and resume each tick until complete.
 --
@@ -988,6 +1005,8 @@ function ArchetypeQuery:update(data)
         end
     end
 end
+
+function ArchetypeQuery:map(fn) for e in self:get() do fn(e) end end
 
 function ArchetypeQuery:delete()
     local ids_to_delete = {}

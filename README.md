@@ -167,6 +167,10 @@ local SmallEnemy = Archetype.new()
 local enemy_ids = SmallEnemy
     :build(10, { spawn_x = 5 }) -- prepares 10 entity instances
     :spawn()                    -- commits them to the World and returns a table of IDs
+
+-- some archetype methods
+SmallEnemy:query():where({ id__in = { 1, 2, 3 } }):update({ velocity = { x = 0, y = 0 } })
+SmallEnemy:query():map(function(e) e.position.x = 100 end)
 ```
 
 ## Query Builder

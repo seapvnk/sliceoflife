@@ -120,6 +120,14 @@ describe("Type")
         eq(unpacked.mod.defense, 8)
     end)
 
+    it("enums", function()
+        T.enum("Color", { "red", "green", "blue" })
+        eq(T.enum("Color", 1), "red")
+        eq(T.enum("Color", 2), "green")
+        eq(T.enum("Color", 3), "blue")
+        eq(T.enum("Color", 4), nil)
+    end)
+
 describe("World.spawn / proxy")
 
     it("spawn returns a numeric id", function()
@@ -490,6 +498,9 @@ describe("Archetypes")
         is_true(e ~= nil)
         near(e.position.x, 10)
         near(e.position.y, 20)
+
+        HeroArch:query():map(function(e) e.position.x = 100 end)
+        for e in HeroArch:query():get() do eq(e.position.x, 100) end
         
         local unpacked = T.sunpack("hero_stats", { attr = e.hero_stats.attr, mod = e.hero_stats.mod })
         eq(unpacked.attr.str, 18)
